@@ -58,6 +58,9 @@ object NovaScript : Plugin() {
         BlockScriptManager.init(getDataFolder())
         val count = ScriptManager.list().size
         info("[NovaScript] 插件已启用! 已加载 $count 个脚本")
+
+        // 异步检查更新
+        UpdateChecker.checkAsync(description.version)
     }
 
     private fun releaseExamples(scriptsDir: File) {
