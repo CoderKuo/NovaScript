@@ -347,18 +347,25 @@ object MainCommand {
 
     @CommandBody
     val eval = subCommand {
-        dynamic("脚本名") {
+        dynamic("参数") {
             suggestion<CommandSender>(uncheck = true) { _, _ ->
                 ScriptManager.getScriptNames()
             }
+            // /nova eval <脚本名> <代码> — 在脚本上下文中执行
             dynamic("代码") {
                 execute<CommandSender> { sender, context, _ ->
-                    val name = context["脚本名"]
+                    val name = context["参数"]
                     val code = context["代码"]
                     val ns = ScriptManager.makeNamespace(ScriptManager.SELF_PLUGIN, name)
                     val result = ScriptManager.evalInScript(ns, code)
                     sender.sendMessage("§a[NovaScript] §f$result")
                 }
+            }
+            // /nova eval <代码> — 直接执行代码（独立上下文）
+            execute<CommandSender> { sender, context, _ ->
+                val code = context["参数"]
+                val result = ScriptManager.eval(code)
+                sender.sendMessage("§a[NovaScript] §f$result")
             }
         }
     }

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/nova-banner.svg" alt="NovaLang" width="600" />
+</p>
+
 # NovaScript
 
 基于 [NovaLang](https://github.com/CoderKuo/NovaLang) 脚本语言的 Minecraft 服务端脚本插件。用简洁的脚本快速开发服务器功能，同时提供开发者 API 供第三方插件集成。
@@ -53,7 +57,8 @@ on("PlayerJoinEvent") { event ->
 | `/nova unload <脚本名>` | 卸载指定脚本 |
 | `/nova reload [脚本名]` | 重载脚本，不指定则重载全部 |
 | `/nova list` | 列出所有已加载的脚本 |
-| `/nova eval <脚本名> <代码>` | 在脚本上下文中执行调试代码 |
+| `/nova eval <代码>` | 直接执行代码片段 |
+| `/nova eval <脚本名> <代码>` | 在指定脚本的上下文中执行调试代码 |
 | `/nova papi` | 重载配置式占位符 |
 | `/nova events` | 重载配置式事件 |
 | `/nova tasks` | 重载配置式定时任务 |
