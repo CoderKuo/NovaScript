@@ -57,10 +57,44 @@ object NovaScript : Plugin() {
         ItemScriptManager.init(getDataFolder())
         BlockScriptManager.init(getDataFolder())
         val count = ScriptManager.list().size
+        val plugin = taboolib.platform.BukkitPlugin.getInstance()
+        val version = plugin.description.version
         info("[NovaScript] 插件已启用! 已加载 $count 个脚本")
 
+        // bStats
+        val metrics = taboolib.platform.BukkitMetrics(plugin, "NovaScript", 30450, version)
+        metrics.addCustomChart(taboolib.platform.BukkitMetrics.SimplePie("script_count") {
+            when (val c = ScriptManager.list().size) {
+                0 -> "0"
+                in 1..5 -> "1-5"
+                in 6..10 -> "6-10"
+                in 11..20 -> "11-20"
+                in 21..50 -> "21-50"
+                else -> "50+"
+            }
+        })
+        metrics.addCustomChart(taboolib.platform.BukkitMetrics.SimplePie("module_count") {
+            when (ModuleManager.getModuleNames().size) {
+                0 -> "0"
+                1 -> "1"
+                2 -> "2"
+                in 3..5 -> "3-5"
+                else -> "5+"
+            }
+        })
+        metrics.addCustomChart(taboolib.platform.BukkitMetrics.AdvancedPie("config_features") {
+            mapOf(
+                "placeholders" to PlaceholderManager.getNames().size,
+                "events" to EventManager.getCount(),
+                "tasks" to TaskManager.getCount(),
+                "commands" to CommandManager.getCount(),
+                "items" to ItemScriptManager.getCount(),
+                "blocks" to BlockScriptManager.getCount()
+            ).filter { it.value > 0 }
+        })
+
         // 异步检查更新
-        UpdateChecker.checkAsync(description.version)
+        UpdateChecker.checkAsync(version)
     }
 
     private fun releaseExamples(scriptsDir: File) {
