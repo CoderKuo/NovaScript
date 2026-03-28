@@ -1,0 +1,17 @@
+// 欢迎脚本 — 玩家进服欢迎 & 退出提示
+
+on("PlayerJoinEvent") { event ->
+    val player = event.getPlayer()
+    val name = player.getName()
+    val online = server.getOnlinePlayers().size()
+
+    broadcast("&a+ &e" + name + " &7加入了服务器 &8(&f" + online + "&8)")
+    sendTitle(player, "&6欢迎回来", "&e祝你游戏愉快")
+    sendActionBar(player, "&7在线人数: &f" + online)
+}
+
+on("PlayerQuitEvent") { event ->
+    val name = event.getPlayer().getName()
+    val online = server.getOnlinePlayers().size() - 1
+    broadcast("&c- &e" + name + " &7离开了服务器 &8(&f" + online + "&8)")
+}

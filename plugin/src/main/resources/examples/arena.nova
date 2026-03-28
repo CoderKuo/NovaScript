@@ -1,0 +1,290 @@
+// ============================================================
+// PvP 竞技场 — 展示：状态机、事件驱动、when 匹配、
+//   闭包、定时器、集合操作、Map 字面量、复杂 GUI
+// ============================================================
+
+val config = loadConfig("config.yml")
+if (config.getString("min-players") == null) {
+    config.set("min-players", 2)
+    config.set("max-players", 8)
+    config.set("wait-time", 30)
+    config.set("game-time", 180)
+    saveConfig(config)
+}
+
+val MIN_PLAYERS = config.getInt("min-players")
+val MAX_PLAYERS = config.getInt("max-players")
+val WAIT_TIME = config.getInt("wait-time")
+val GAME_TIME = config.getInt("game-time")
+
+// ── 竞技场状态机 ──────────────────────────────
+
+// 状态: IDLE → WAITING → COUNTDOWN → FIGHTING → ENDING
+var state = "IDLE"
+val players = java.util.HashMap()       // name -> #{kills, deaths, streak}
+var timer = 0
+val spectators = java.util.ArrayList()
+
+fun prefix() = "&8[&c竞技场&8]"
+
+fun arenaMsg(msg) {
+    players.forEach { name, _ ->
+        val p = server.getPlayer(name)
+        if (p != null) p.sendMessage("${prefix()} $msg")
+    }
+}
+
+fun setState(newState) {
+    state = newState
+    log("竞技场状态: $newState (${players.size()} 名玩家)")
+}
+
+// ── 玩家管理 ──────────────────────────────────
+
+fun joinArena(player) {
+    val name = player.getName()
+    when {
+        state == "FIGHTING" || state == "ENDING" -> {
+            player.sendMessage("${prefix()} &c比赛进行中，无法加入")
+            return false
+        }
+        players.containsKey(name) -> {
+            player.sendMessage("${prefix()} &c你已经在竞技场中")
+            return false
+        }
+        players.size() >= MAX_PLAYERS -> {
+            player.sendMessage("${prefix()} &c竞技场已满 (${MAX_PLAYERS}人)")
+            return false
+        }
+    }
+
+    players.put(name, #{"kills": 0, "deaths": 0, "streak": 0})
+    arenaMsg("&a${name} 加入了竞技场 &7(${players.size()}/${MAX_PLAYERS})")
+
+    // 自动开始等待
+    if (state == "IDLE" && players.size() >= MIN_PLAYERS) {
+        setState("WAITING")
+        timer = WAIT_TIME
+        startTimer()
+    }
+
+    return true
+}
+
+fun leaveArena(player) {
+    val name = player.getName()
+    if (!players.containsKey(name)) return
+    players.remove(name)
+    arenaMsg("&e${name} 离开了竞技场 &7(${players.size()}/${MAX_PLAYERS})")
+
+    // 人数不足
+    if (state == "WAITING" && players.size() < MIN_PLAYERS) {
+        setState("IDLE")
+        timer = 0
+        arenaMsg("&c人数不足，等待中止")
+    }
+
+    // 比赛中只剩 1 人
+    if (state == "FIGHTING" && players.size() <= 1) {
+        endGame()
+    }
+}
+
+// ── 计时器 ────────────────────────────────────
+
+fun startTimer() {
+    launch {
+        delay(1000)
+        sync {
+            if (state == "IDLE") return
+
+            timer = timer - 1
+
+            when (state) {
+                "WAITING" -> {
+                    when (timer) {
+                        10, 5, 3, 2, 1 -> arenaMsg("&e${timer}s &f后开始比赛...")
+                        0 -> startGame()
+                    }
+                    if (timer > 0) startTimer()
+                }
+                "FIGHTING" -> {
+                    // 计分板更新
+                    if (timer % 10 == 0 || timer <= 5) {
+                        arenaMsg("&f剩余时间: &e${timer}s")
+                    }
+                    if (timer <= 0) {
+                        endGame()
+                    } else {
+                        startTimer()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── 游戏流程 ──────────────────────────────────
+
+fun startGame() {
+    setState("FIGHTING")
+    timer = GAME_TIME
+
+    // 重置所有玩家状态
+    players.forEach { name, stats ->
+        stats.put("kills", 0)
+        stats.put("deaths", 0)
+        stats.put("streak", 0)
+
+        val p = server.getPlayer(name)
+        if (p != null) {
+            p.setHealth(p.getMaxHealth())
+            p.setFoodLevel(20)
+            sendTitle(p, "&c⚔ 战斗开始!", "&f存活 ${GAME_TIME}s")
+        }
+    }
+
+    arenaMsg("&c&l══ 战斗开始! ══")
+    arenaMsg("&f时限: &e${GAME_TIME}s &8| &f玩家: &e${players.size()}")
+    startTimer()
+}
+
+fun endGame() {
+    setState("ENDING")
+    arenaMsg("&6&l══ 比赛结束! ══")
+
+    // 排行榜（按 kills 降序，kills 相同按 deaths 升序）
+    val sorted = java.util.ArrayList(players.entrySet())
+    sorted.sort { a, b ->
+        val ka = a.getValue().get("kills")
+        val kb = b.getValue().get("kills")
+        if (ka != kb) return kb - ka
+        return a.getValue().get("deaths") - b.getValue().get("deaths")
+    }
+
+    arenaMsg("&6─── 最终排行 ───")
+    for (i in 0..<sorted.size()) {
+        val entry = sorted.get(i)
+        val name = entry.getKey()
+        val s = entry.getValue()
+        val medal = when (i) {
+            0    -> "&6🥇"
+            1    -> "&f🥈"
+            2    -> "&c🥉"
+            else -> "&7  "
+        }
+        val kd = if (s.get("deaths") > 0)
+            java.lang.String.format("%.2f", s.get("kills").toDouble() / s.get("deaths"))
+        else
+            "${s.get("kills")}.00"
+        arenaMsg("$medal &e${name} &8- &f${s.get("kills")}K/${s.get("deaths")}D &7(KD: $kd)")
+    }
+
+    // MVP
+    if (sorted.size() > 0) {
+        val mvp = sorted.get(0).getKey()
+        broadcast("${prefix()} &6🏆 MVP: &e$mvp &7— ${sorted.get(0).getValue().get("kills")} 击杀!")
+
+        val mvpPlayer = server.getPlayer(mvp)
+        if (mvpPlayer != null) {
+            sendTitle(mvpPlayer, "&6🏆 MVP!", "&e恭喜获得第一名")
+        }
+    }
+
+    // 延迟重置
+    launch {
+        delay(5000)
+        sync {
+            players.clear()
+            spectators.clear()
+            setState("IDLE")
+        }
+    }
+}
+
+// ── 事件监听 ──────────────────────────────────
+
+on("PlayerDeathEvent") { event ->
+    val victim = event.getEntity()
+    val vName = victim.getName()
+
+    if (!players.containsKey(vName)) return
+
+    val vStats = players.get(vName)
+    vStats.put("deaths", vStats.get("deaths") + 1)
+    vStats.put("streak", 0)
+
+    val killer = victim.getKiller()
+    if (killer != null && players.containsKey(killer.getName())) {
+        val kStats = players.get(killer.getName())
+        val kills = kStats.get("kills") + 1
+        val streak = kStats.get("streak") + 1
+        kStats.put("kills", kills)
+        kStats.put("streak", streak)
+
+        val streakMsg = when {
+            streak >= 7 -> " &4&l⚡ 超神!"
+            streak >= 5 -> " &c&l🔥 无人能挡!"
+            streak >= 3 -> " &e✦ 三连杀!"
+            else        -> ""
+        }
+
+        arenaMsg("&c${killer.getName()} &7击杀了 &c${vName}$streakMsg")
+        sendActionBar(killer, "&c⚔ ${kills} 击杀 &8| &e🔥 ${streak} 连杀")
+    }
+
+    // 立即复活
+    launch {
+        delay(50)
+        sync {
+            victim.spigot().respawn()
+            victim.setHealth(victim.getMaxHealth())
+        }
+    }
+}
+
+on("PlayerQuitEvent") { event ->
+    leaveArena(event.getPlayer())
+}
+
+// ── 命令 ──────────────────────────────────────
+
+command("arena") { sender, args ->
+    val sub = if (args.size() > 0) args.get(0) else "help"
+
+    when (sub) {
+        "join"  -> joinArena(sender)
+        "leave" -> leaveArena(sender)
+        "info"  -> {
+            sender.sendMessage("&8─────── &c竞技场 &8───────")
+            sender.sendMessage("&7状态: &f$state")
+            sender.sendMessage("&7玩家: &f${players.size()}/${MAX_PLAYERS}")
+            if (timer > 0) sender.sendMessage("&7倒计时: &e${timer}s")
+            if (players.size() > 0) {
+                sender.sendMessage("&7参与者:")
+                players.forEach { name, s ->
+                    sender.sendMessage("  &e$name &8- &f${s.get("kills")}K/${s.get("deaths")}D")
+                }
+            }
+        }
+        "force" -> {
+            if (!sender.hasPermission("arena.admin")) {
+                sender.sendMessage("&c无权限")
+                return
+            }
+            when (state) {
+                "WAITING"  -> { timer = 0; startGame() }
+                "FIGHTING" -> endGame()
+                else       -> sender.sendMessage("&c当前状态无法强制操作")
+            }
+        }
+        else -> {
+            sender.sendMessage("&c⚔ 竞技场命令:")
+            sender.sendMessage("&e  /arena join   &7- 加入竞技场")
+            sender.sendMessage("&e  /arena leave  &7- 离开竞技场")
+            sender.sendMessage("&e  /arena info   &7- 查看状态")
+        }
+    }
+}
+
+log("PvP 竞技场已加载 — /arena join|leave|info")

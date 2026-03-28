@@ -1,0 +1,16 @@
+// 聊天格式化脚本 — 自定义聊天前缀和颜色
+
+on("AsyncPlayerChatEvent") { event ->
+    val player = event.getPlayer()
+    val message = event.getMessage()
+
+    if (player.isOp()) {
+        event.setFormat("&c[管理员] &f" + player.getName() + " &7>> &f" + message)
+    } else {
+        event.setFormat("&a[玩家] &f" + player.getName() + " &7>> &7" + message)
+    }
+
+    event.setFormat(colorize(event.getFormat()))
+}
+
+log("聊天格式化脚本已加载")

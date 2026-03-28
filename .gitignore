@@ -1,0 +1,19 @@
+.gradle
+.gradle-home
+.idea
+build
+.kotlin
+bin
+/nul
+/com/
+/src/
+
+### VSCode ###
+.vscode
+
+### Claude Code ###
+.claude
+.claude.local.md
+
+### Cursor ###
+.cursor

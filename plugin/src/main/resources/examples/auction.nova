@@ -1,0 +1,224 @@
+// ============================================================
+// 实时拍卖行 — 展示：when 表达式、管道操作符、字符串插值、
+//   尾随 Lambda、闭包、定时任务、集合操作链、负索引
+// ============================================================
+
+val config = loadConfig("config.yml")
+if (config.getString("duration") == null) {
+    config.set("duration", 60)
+    config.set("min-bid", 100.0)
+    config.set("tax-rate", 0.05)
+    saveConfig(config)
+}
+
+val DURATION = config.getInt("duration")
+val MIN_BID = config.getDouble("min-bid")
+val TAX_RATE = config.getDouble("tax-rate")
+
+// 拍卖状态
+var currentAuction = null
+val bidHistory = java.util.ArrayList()
+
+// ── 工具函数 ──────────────────────────────────
+
+fun formatMoney(amount) = "&6${java.lang.String.format("%.1f", amount)} 金币"
+
+fun timeBar(seconds, total) {
+    val ratio = seconds.toDouble() / total
+    val filled = (ratio * 20).toInt()
+    val empty = 20 - filled
+    val color = when {
+        ratio > 0.5  -> "&a"
+        ratio > 0.25 -> "&e"
+        else         -> "&c"
+    }
+    return "$color${"█".repeat(filled)}&7${"░".repeat(empty)} &f${seconds}s"
+}
+
+fun announce(msg) = broadcast("&8[&6拍卖&8] $msg")
+
+// ── 拍卖核心 ──────────────────────────────────
+
+fun startAuction(seller, item, startPrice) {
+    if (currentAuction != null) return false
+
+    currentAuction = #{
+        "seller":     seller.getName(),
+        "item":       item,
+        "price":      startPrice,
+        "bidder":     null,
+        "timeLeft":   DURATION,
+        "bidCount":   0
+    }
+    bidHistory.clear()
+
+    val itemName = item.getItemMeta().getDisplayName() ?: item.getType().name()
+    announce("&e${seller.getName()} &f正在拍卖 $itemName")
+    announce("&f起拍价: ${formatMoney(startPrice)} &8| &f时限: &e${DURATION}s")
+
+    // 倒计时（每秒更新）
+    scheduleCountdown()
+    return true
+}
+
+fun scheduleCountdown() {
+    launch {
+        delay(1000)
+        sync {
+            if (currentAuction == null) return
+
+            val timeLeft = currentAuction.get("timeLeft") - 1
+            currentAuction.put("timeLeft", timeLeft)
+
+            when (timeLeft) {
+                0 -> endAuction()
+                10, 5, 3, 2, 1 -> {
+                    val bar = timeBar(timeLeft, DURATION)
+                    announce("&c倒计时 &f${timeLeft}s $bar")
+                }
+            }
+
+            if (timeLeft > 0) scheduleCountdown()
+        }
+    }
+}
+
+fun placeBid(player, amount) {
+    if (currentAuction == null) {
+        player.sendMessage("&c当前没有拍卖进行中")
+        return
+    }
+    if (player.getName() == currentAuction.get("seller")) {
+        player.sendMessage("&c你不能竞拍自己的物品")
+        return
+    }
+
+    val currentPrice = currentAuction.get("price")
+    val minNext = currentPrice + MIN_BID
+    if (amount < minNext) {
+        player.sendMessage("&c最低出价: ${formatMoney(minNext)}")
+        return
+    }
+    if (getBalance(player) < amount) {
+        player.sendMessage("&c余额不足! 当前: ${formatMoney(getBalance(player))}")
+        return
+    }
+
+    // 退还上一个竞拍者
+    val prevBidder = currentAuction.get("bidder")
+    if (prevBidder != null) {
+        val prev = server.getPlayer(prevBidder)
+        if (prev != null) {
+            deposit(prev, currentPrice)
+            prev.sendMessage("&e你的出价已被超越! 已退还 ${formatMoney(currentPrice)}")
+        }
+    }
+
+    withdraw(player, amount)
+    currentAuction.put("price", amount)
+    currentAuction.put("bidder", player.getName())
+    currentAuction.put("bidCount", currentAuction.get("bidCount") + 1)
+
+    // 记录出价历史
+    bidHistory.add(#{"player": player.getName(), "amount": amount})
+
+    // 最后 10 秒内加价延时 5 秒
+    if (currentAuction.get("timeLeft") < 10) {
+        currentAuction.put("timeLeft", currentAuction.get("timeLeft") + 5)
+    }
+
+    announce("&a${player.getName()} &f出价 ${formatMoney(amount)} &8(共 ${currentAuction.get("bidCount")} 次)")
+}
+
+fun endAuction() {
+    val auction = currentAuction
+    currentAuction = null
+
+    val bidder = auction.get("bidder")
+    val price = auction.get("price")
+    val sellerName = auction.get("seller")
+    val item = auction.get("item")
+    val count = auction.get("bidCount")
+
+    if (bidder == null) {
+        announce("&c拍卖流拍! 无人出价")
+        val seller = server.getPlayer(sellerName)
+        if (seller != null) giveItem(seller, item)
+        return
+    }
+
+    // 计算税后收入
+    val tax = price * TAX_RATE
+    val income = price - tax
+
+    announce("&a拍卖成交!")
+    announce("&e$bidder &f以 ${formatMoney(price)} &f赢得拍卖 &8(${count}次出价)")
+    announce("&7卖家 &e$sellerName &7收入 ${formatMoney(income)} &8(税率 ${(TAX_RATE * 100).toInt()}%)")
+
+    // 发放物品和金币
+    val winner = server.getPlayer(bidder)
+    if (winner != null) giveItem(winner, item)
+
+    val seller = server.getPlayer(sellerName)
+    if (seller != null) deposit(seller, income)
+
+    // 打印出价历史
+    if (bidHistory.size() > 0) {
+        log("拍卖结束 — 出价记录:")
+        bidHistory.forEach { bid ->
+            log("  ${bid.get("player")}: ${bid.get("amount")}")
+        }
+    }
+}
+
+// ── 命令注册 ──────────────────────────────────
+
+command("auction") { sender, args ->
+    if (args.size() < 1) {
+        sender.sendMessage("&e用法:")
+        sender.sendMessage("&f  /auction start <起拍价> &7- 拍卖手中物品")
+        sender.sendMessage("&f  /auction bid <金额>   &7- 出价竞拍")
+        sender.sendMessage("&f  /auction info         &7- 查看当前拍卖")
+        return
+    }
+
+    when (args.get(0)) {
+        "start" -> {
+            val item = sender.getInventory().getItemInMainHand()
+            if (item == null || item.getType().name() == "AIR") {
+                sender.sendMessage("&c请手持要拍卖的物品")
+                return
+            }
+            val price = if (args.size() > 1) args.get(1).toDouble() else MIN_BID
+            if (startAuction(sender, item.clone(), price)) {
+                sender.getInventory().setItemInMainHand(null)
+            } else {
+                sender.sendMessage("&c已有拍卖正在进行")
+            }
+        }
+        "bid" -> {
+            if (args.size() < 2) {
+                sender.sendMessage("&c用法: /auction bid <金额>")
+                return
+            }
+            placeBid(sender, args.get(1).toDouble())
+        }
+        "info" -> {
+            if (currentAuction == null) {
+                sender.sendMessage("&7当前没有拍卖进行中")
+                return
+            }
+            val a = currentAuction
+            val bar = timeBar(a.get("timeLeft"), DURATION)
+            sender.sendMessage("&8─────── &6拍卖信息 &8───────")
+            sender.sendMessage("&7卖家: &e${a.get("seller")}")
+            sender.sendMessage("&7当前价: ${formatMoney(a.get("price"))}")
+            sender.sendMessage("&7最高出价者: &e${a.get("bidder") ?: "无"}")
+            sender.sendMessage("&7出价次数: &f${a.get("bidCount")}")
+            sender.sendMessage("&7剩余时间: $bar")
+        }
+        else -> sender.sendMessage("&c未知子命令: ${args.get(0)}")
+    }
+}
+
+log("拍卖行脚本已加载 — /auction start|bid|info")

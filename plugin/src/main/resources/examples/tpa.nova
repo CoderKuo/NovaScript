@@ -1,0 +1,65 @@
+// TPA 脚本 — 简易传送请求系统
+
+val config = loadConfig("config.yml")
+if (config.getString("timeout") == null) {
+    config.set("timeout", 30)
+    saveConfig(config)
+}
+val timeout = config.getInt("timeout")
+
+// 存储待处理的传送请求: 目标玩家名 -> 请求者玩家名
+val requests = java.util.HashMap()
+
+command("tpa") { sender, args ->
+    if (args.size() < 1) {
+        sender.sendMessage("&c用法: /tpa <玩家名>")
+        return
+    }
+    val target = server.getPlayer(args.get(0))
+    if (target == null) {
+        sender.sendMessage("&c玩家不在线")
+        return
+    }
+    if (target.getName() == sender.getName()) {
+        sender.sendMessage("&c不能向自己发送传送请求")
+        return
+    }
+    requests.put(target.getName(), sender.getName())
+    sender.sendMessage("&a已向 &e" + target.getName() + " &a发送传送请求")
+    target.sendMessage("&e" + sender.getName() + " &a请求传送到你身边")
+    target.sendMessage("&a输入 &e/tpaccept &a接受，&e/tpdeny &a拒绝")
+}
+
+command("tpaccept") { sender, args ->
+    val from = requests.get(sender.getName())
+    if (from == null) {
+        sender.sendMessage("&c没有待处理的传送请求")
+        return
+    }
+    val player = server.getPlayer(from)
+    if (player == null) {
+        sender.sendMessage("&c对方已下线")
+        requests.remove(sender.getName())
+        return
+    }
+    player.teleport(sender.getLocation())
+    player.sendMessage("&a已传送到 &e" + sender.getName() + " &a身边")
+    sender.sendMessage("&a已接受 &e" + from + " &a的传送请求")
+    requests.remove(sender.getName())
+}
+
+command("tpdeny") { sender, args ->
+    val from = requests.get(sender.getName())
+    if (from == null) {
+        sender.sendMessage("&c没有待处理的传送请求")
+        return
+    }
+    val player = server.getPlayer(from)
+    if (player != null) {
+        player.sendMessage("&c" + sender.getName() + " 拒绝了你的传送请求")
+    }
+    sender.sendMessage("&a已拒绝传送请求")
+    requests.remove(sender.getName())
+}
+
+log("TPA 脚本已加载 (超时: " + timeout + "秒)")

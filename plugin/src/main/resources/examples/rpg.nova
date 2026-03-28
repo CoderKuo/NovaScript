@@ -1,0 +1,306 @@
+// ============================================================
+// RPG 技能系统 — 展示：when 模式匹配、闭包工厂、高阶函数、
+//   集合链式操作、Map 字面量、字符串插值、范围表达式
+// ============================================================
+
+val db = connectSQLite("rpg.db")
+
+// ── 初始化数据库 ──────────────────────────────
+
+db.getConnection().use { conn ->
+    conn.createStatement().use { stmt ->
+        stmt.execute("CREATE TABLE IF NOT EXISTS players (name TEXT PRIMARY KEY, level INT DEFAULT 1, exp INT DEFAULT 0, class TEXT DEFAULT 'warrior', mana INT DEFAULT 100)")
+        stmt.execute("CREATE TABLE IF NOT EXISTS cooldowns (name TEXT, skill TEXT, expires BIGINT, PRIMARY KEY(name, skill))")
+    }
+}
+
+// ── 职业技能定义（闭包工厂模式） ────────────────
+
+fun defineSkill(name, manaCost, cooldownSec, icon, desc, effect) {
+    return #{
+        "name": name, "mana": manaCost, "cooldown": cooldownSec * 1000,
+        "icon": icon, "desc": desc, "effect": effect
+    }
+}
+
+val SKILLS = #{
+    "warrior": [
+        defineSkill("战吼", 20, 15, "🗡", "对周围敌人造成伤害并击退") { caster ->
+            val loc = caster.getLocation()
+            caster.getWorld().getNearbyEntities(loc, 5.0, 5.0, 5.0)
+                .filter { it != caster }
+                .forEach { entity ->
+                    entity.damage(6.0, caster)
+                    val dir = entity.getLocation().toVector().subtract(loc.toVector()).normalize().multiply(1.5)
+                    entity.setVelocity(dir)
+                }
+            "&c${caster.getName()} 发动了 &4战吼&c，震慑四方!"
+        },
+        defineSkill("铁壁", 30, 30, "🛡", "获得 10 秒伤害减免") { caster ->
+            // 标记防御状态
+            caster.setMetadata("rpg_shield", org.bukkit.metadata.FixedMetadataValue(
+                pluginManager.getPlugin("NovaScript"), System.currentTimeMillis() + 10000
+            ))
+            sendTitle(caster, "&7⛨ 铁壁 ⛨", "&f伤害减免 10 秒")
+            "&e${caster.getName()} 开启了 &6铁壁&e 防御!"
+        }
+    ],
+    "mage": [
+        defineSkill("火球术", 35, 8, "🔥", "发射一颗火球") { caster ->
+            val dir = caster.getLocation().getDirection()
+            caster.getWorld().spawn(
+                caster.getEyeLocation(),
+                java.lang.Class.forName("org.bukkit.entity.Fireball")
+            )
+            "&6${caster.getName()} 释放了 &c🔥火球术"
+        },
+        defineSkill("治愈", 40, 20, "💚", "恢复自身生命值") { caster ->
+            val maxHp = caster.getMaxHealth()
+            val heal = maxHp * 0.4
+            val newHp = java.lang.Math.min(caster.getHealth() + heal, maxHp)
+            caster.setHealth(newHp)
+            "&a${caster.getName()} 使用了 &2💚治愈 &a(+${heal.toInt()} HP)"
+        }
+    ],
+    "archer": [
+        defineSkill("箭雨", 50, 25, "🏹", "向天空射出箭雨") { caster ->
+            val loc = caster.getLocation()
+            for (i in 0..<12) {
+                launch {
+                    delay(i * 100)
+                    sync {
+                        val offset = loc.clone().add(
+                            (java.lang.Math.random() - 0.5) * 8,
+                            10.0,
+                            (java.lang.Math.random() - 0.5) * 8
+                        )
+                        caster.getWorld().spawnArrow(offset, org.bukkit.util.Vector(0, -2, 0), 1.5, 2.0)
+                    }
+                }
+            }
+            "&b${caster.getName()} 施展了 &3🏹箭雨&b！小心头顶!"
+        },
+        defineSkill("疾跑", 15, 12, "💨", "获得 5 秒速度提升") { caster ->
+            caster.addPotionEffect(org.bukkit.potion.PotionEffect(
+                org.bukkit.potion.PotionEffectType.SPEED, 100, 2
+            ))
+            "&f${caster.getName()} 开启了 &b💨疾跑"
+        }
+    ]
+}
+
+// ── 数据访问层 ────────────────────────────────
+
+fun getPlayerData(name) {
+    val rs = db.getConnection().use { conn ->
+        val ps = conn.prepareStatement("SELECT * FROM players WHERE name = ?")
+        ps.setString(1, name)
+        val rs = ps.executeQuery()
+        if (!rs.next()) {
+            conn.prepareStatement("INSERT OR IGNORE INTO players (name) VALUES (?)").also {
+                it.setString(1, name)
+                it.execute()
+            }
+            return #{"level": 1, "exp": 0, "class": "warrior", "mana": 100}
+        }
+        return #{"level": rs.getInt("level"), "exp": rs.getInt("exp"),
+                 "class": rs.getString("class"), "mana": rs.getInt("mana")}
+    }
+}
+
+fun savePlayerData(name, data) {
+    db.getConnection().use { conn ->
+        val ps = conn.prepareStatement("UPDATE players SET level=?, exp=?, class=?, mana=? WHERE name=?")
+        ps.setInt(1, data.get("level"))
+        ps.setInt(2, data.get("exp"))
+        ps.setString(3, data.get("class"))
+        ps.setInt(4, data.get("mana"))
+        ps.setString(5, name)
+        ps.execute()
+    }
+}
+
+fun isOnCooldown(name, skill) {
+    val now = System.currentTimeMillis()
+    return db.getConnection().use { conn ->
+        val ps = conn.prepareStatement("SELECT expires FROM cooldowns WHERE name=? AND skill=?")
+        ps.setString(1, name)
+        ps.setString(2, skill)
+        val rs = ps.executeQuery()
+        if (rs.next()) return rs.getLong("expires") > now
+        return false
+    }
+}
+
+fun setCooldown(name, skill, durationMs) {
+    val expires = System.currentTimeMillis() + durationMs
+    db.getConnection().use { conn ->
+        val ps = conn.prepareStatement("REPLACE INTO cooldowns (name, skill, expires) VALUES (?, ?, ?)")
+        ps.setString(1, name)
+        ps.setString(2, skill)
+        ps.setLong(3, expires)
+        ps.execute()
+    }
+}
+
+// ── 经验与升级系统 ────────────────────────────
+
+fun expForLevel(level) = level * level * 50
+
+fun addExp(player, amount) {
+    val data = getPlayerData(player.getName())
+    var exp = data.get("exp") + amount
+    var level = data.get("level")
+    var leveledUp = false
+
+    while (exp >= expForLevel(level)) {
+        exp = exp - expForLevel(level)
+        level = level + 1
+        leveledUp = true
+    }
+
+    data.put("exp", exp)
+    data.put("level", level)
+    data.put("mana", 100 + level * 10)
+    savePlayerData(player.getName(), data)
+
+    sendActionBar(player, "&b+${amount} EXP &8| &f${exp}/${expForLevel(level)}")
+    if (leveledUp) {
+        sendTitle(player, "&6⬆ Level ${level}", "&eMANA 上限: ${100 + level * 10}")
+        broadcast("&e${player.getName()} &f升到了 &6Lv.${level}&f!")
+    }
+}
+
+// ── 技能施放 ──────────────────────────────────
+
+fun castSkill(player, skillIndex) {
+    val data = getPlayerData(player.getName())
+    val cls = data.get("class")
+    val skills = SKILLS.get(cls)
+
+    if (skillIndex < 0 || skillIndex >= skills.size()) {
+        player.sendMessage("&c无效的技能序号")
+        return
+    }
+    val skill = skills.get(skillIndex)
+
+    // 检查冷却
+    if (isOnCooldown(player.getName(), skill.get("name"))) {
+        player.sendMessage("&c${skill.get("icon")} ${skill.get("name")} 正在冷却中...")
+        return
+    }
+
+    // 检查法力
+    if (data.get("mana") < skill.get("mana")) {
+        player.sendMessage("&9法力不足! &f需要 ${skill.get("mana")} &8| &f当前 ${data.get("mana")}")
+        return
+    }
+
+    // 扣除法力 & 设置冷却
+    data.put("mana", data.get("mana") - skill.get("mana"))
+    savePlayerData(player.getName(), data)
+    setCooldown(player.getName(), skill.get("name"), skill.get("cooldown"))
+
+    // 执行效果
+    val msg = skill.get("effect")(player)
+    broadcast(msg)
+}
+
+// ── 命令 ──────────────────────────────────────
+
+command("rpg") { sender, args ->
+    if (args.size() < 1) {
+        sender.sendMessage("&6═══ RPG 技能系统 ═══")
+        sender.sendMessage("&e/rpg info       &7- 查看角色信息")
+        sender.sendMessage("&e/rpg class <职业> &7- 选择职业 (warrior/mage/archer)")
+        sender.sendMessage("&e/rpg skills     &7- 查看技能列表")
+        sender.sendMessage("&e/rpg cast <序号>  &7- 施放技能")
+        return
+    }
+
+    when (args.get(0)) {
+        "info" -> {
+            val data = getPlayerData(sender.getName())
+            val cls = data.get("class")
+            val classIcon = when (cls) {
+                "warrior" -> "⚔ 战士"
+                "mage"    -> "🔮 法师"
+                "archer"  -> "🏹 弓手"
+                else      -> cls
+            }
+            sender.sendMessage("&8─────── &6角色信息 &8───────")
+            sender.sendMessage("&7职业: &e$classIcon")
+            sender.sendMessage("&7等级: &f${data.get("level")} &8| &7经验: &f${data.get("exp")}/${expForLevel(data.get("level"))}")
+            sender.sendMessage("&7法力: &9${data.get("mana")}/${100 + data.get("level") * 10}")
+        }
+        "class" -> {
+            if (args.size() < 2) {
+                sender.sendMessage("&c可选职业: &fwarrior &8| &fmage &8| &farcher")
+                return
+            }
+            val cls = args.get(1)
+            if (!SKILLS.containsKey(cls)) {
+                sender.sendMessage("&c未知职业: $cls")
+                return
+            }
+            val data = getPlayerData(sender.getName())
+            data.put("class", cls)
+            savePlayerData(sender.getName(), data)
+            sender.sendMessage("&a职业已切换为: &e$cls")
+        }
+        "skills" -> {
+            val data = getPlayerData(sender.getName())
+            val skills = SKILLS.get(data.get("class"))
+            sender.sendMessage("&8─────── &6技能列表 &8───────")
+            for (i in 0..<skills.size()) {
+                val s = skills.get(i)
+                val cd = if (isOnCooldown(sender.getName(), s.get("name"))) "&c[冷却中]" else "&a[就绪]"
+                sender.sendMessage("&e[$i] ${s.get("icon")} ${s.get("name")} &8- &7${s.get("desc")}")
+                sender.sendMessage("    &9消耗 ${s.get("mana")} 法力 &8| &7冷却 ${s.get("cooldown") / 1000}s $cd")
+            }
+        }
+        "cast" -> {
+            if (args.size() < 2) {
+                sender.sendMessage("&c用法: /rpg cast <技能序号>")
+                return
+            }
+            castSkill(sender, args.get(1).toInt())
+        }
+        else -> sender.sendMessage("&c未知子命令")
+    }
+}
+
+// ── 事件：击杀经验 ────────────────────────────
+
+on("EntityDeathEvent") { event ->
+    val killer = event.getEntity().getKiller()
+    if (killer != null) {
+        val expGain = when (event.getEntity().getType().name()) {
+            "ZOMBIE"          -> 10
+            "SKELETON"        -> 12
+            "CREEPER"         -> 15
+            "ENDERMAN"        -> 25
+            "WITHER_SKELETON" -> 30
+            "BLAZE"           -> 20
+            else              -> 5
+        }
+        addExp(killer, expGain)
+    }
+}
+
+// ── 事件：铁壁减伤 ────────────────────────────
+
+on("EntityDamageEvent") { event ->
+    val entity = event.getEntity()
+    if (entity.hasMetadata("rpg_shield")) {
+        val expires = entity.getMetadata("rpg_shield").get(0).asLong()
+        if (System.currentTimeMillis() < expires) {
+            event.setDamage(event.getDamage() * 0.3)
+            sendActionBar(entity, "&7⛨ 铁壁减伤 70%")
+        } else {
+            entity.removeMetadata("rpg_shield", pluginManager.getPlugin("NovaScript"))
+        }
+    }
+}
+
+log("RPG 技能系统已加载 — /rpg info|class|skills|cast")

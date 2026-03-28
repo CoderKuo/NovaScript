@@ -1,0 +1,213 @@
+// ============================================================
+// 彩票 & 抽奖系统 — 展示：范围表达式、集合操作链、when、
+//   Map/List 字面量、高阶函数、闭包、GUI 构建
+// ============================================================
+
+val config = loadConfig("config.yml")
+if (config.getString("ticket-price") == null) {
+    config.set("ticket-price", 50.0)
+    config.set("draw-interval", 300)
+    config.set("max-tickets", 10)
+    saveConfig(config)
+}
+
+val TICKET_PRICE = config.getDouble("ticket-price")
+val DRAW_INTERVAL = config.getInt("draw-interval")
+val MAX_TICKETS = config.getInt("max-tickets")
+
+// 奖池状态
+val tickets = java.util.HashMap()   // playerName -> ticketCount
+var countdown = DRAW_INTERVAL
+var roundNumber = 1
+
+// ── 奖品定义 ──────────────────────────────────
+
+val PRIZES = [
+    #{"name": "&6&l✦ 传说大奖",   "chance": 0.05, "color": "&6", "items": [
+        #{"mat": "NETHERITE_INGOT", "name": "&6下界合金锭", "amount": 3},
+        #{"mat": "DIAMOND_BLOCK",   "name": "&b钻石块",     "amount": 5}
+    ]},
+    #{"name": "&d&l✧ 稀有奖品",   "chance": 0.15, "color": "&d", "items": [
+        #{"mat": "DIAMOND",        "name": "&b钻石",    "amount": 8},
+        #{"mat": "EMERALD",        "name": "&a绿宝石",  "amount": 16}
+    ]},
+    #{"name": "&b✧ 优质奖品",     "chance": 0.30, "color": "&b", "items": [
+        #{"mat": "IRON_INGOT",     "name": "&f铁锭",    "amount": 32},
+        #{"mat": "GOLD_INGOT",     "name": "&6金锭",    "amount": 16}
+    ]},
+    #{"name": "&a✦ 普通奖品",     "chance": 0.50, "color": "&a", "items": [
+        #{"mat": "BREAD",          "name": "&e面包",    "amount": 64},
+        #{"mat": "ARROW",          "name": "&7箭矢",    "amount": 64}
+    ]}
+]
+
+// ── 抽奖逻辑 ──────────────────────────────────
+
+fun rollPrize() {
+    val roll = java.lang.Math.random()
+    var cumulative = 0.0
+    for (prize in PRIZES) {
+        cumulative = cumulative + prize.get("chance")
+        if (roll < cumulative) return prize
+    }
+    return PRIZES.get(PRIZES.size() - 1)
+}
+
+fun totalPool() {
+    var sum = 0
+    tickets.values().forEach { sum = sum + it }
+    return sum * TICKET_PRICE
+}
+
+fun drawLottery() {
+    if (tickets.isEmpty()) {
+        broadcast("&8[&e彩票&8] &7本轮无人参与，跳过开奖")
+        startNewRound()
+        return
+    }
+
+    val total = totalPool()
+    broadcast("&8[&e彩票&8] &6═══ 第 ${roundNumber} 轮开奖 ═══")
+    broadcast("&8[&e彩票&8] &f参与人数: &e${tickets.size()} &8| &f奖池: &6${total} 金币")
+
+    // 构建加权票池
+    val pool = java.util.ArrayList()
+    tickets.forEach { name, count ->
+        for (i in 0..<count) pool.add(name)
+    }
+
+    // 随机抽取赢家
+    val winnerName = pool.get((java.lang.Math.random() * pool.size()).toInt())
+    val prize = rollPrize()
+    val ticketCount = tickets.get(winnerName)
+    val winRate = (ticketCount.toDouble() / pool.size() * 100)
+
+    broadcast("&8[&e彩票&8] &6🎉 恭喜 &e$winnerName &6中奖!")
+    broadcast("&8[&e彩票&8] &f奖品: ${prize.get("name")}")
+    broadcast("&8[&e彩票&8] &7(持有 $ticketCount 张票，中奖率 ${java.lang.String.format("%.1f", winRate)}%)")
+
+    // 发放奖品
+    val winner = server.getPlayer(winnerName)
+    if (winner != null) {
+        prize.get("items").forEach { item ->
+            val built = buildItem(item.get("mat")) { b ->
+                b.setName(item.get("name"))
+                b.setAmount(item.get("amount"))
+                b.colored()
+            }
+            giveItem(winner, built)
+        }
+        // 奖金（奖池的 60%）
+        val cashPrize = total * 0.6
+        deposit(winner, cashPrize)
+        winner.sendMessage("&a你还获得了 &6${cashPrize} 金币 &a奖金!")
+        sendTitle(winner, prize.get("color") + "🎉 中奖了!", "&f${prize.get("name")}")
+    }
+
+    startNewRound()
+}
+
+fun startNewRound() {
+    roundNumber = roundNumber + 1
+    tickets.clear()
+    countdown = DRAW_INTERVAL
+}
+
+// ── 定时倒计时 ────────────────────────────────
+
+fun tickCountdown() {
+    launch {
+        delay(1000)
+        sync {
+            countdown = countdown - 1
+            when (countdown) {
+                0          -> drawLottery()
+                60, 30, 10 -> broadcast("&8[&e彩票&8] &f距开奖还有 &e${countdown}s &8| &f奖池: &6${totalPool()} 金币")
+            }
+            if (countdown > 0) tickCountdown()
+            else tickCountdown()  // 新一轮也要继续
+        }
+    }
+}
+
+tickCountdown()
+
+// ── GUI ──────────────────────────────────────
+
+fun openLotteryMenu(player) {
+    val menu = createMenu("&0&l🎰 彩票系统 &8第${roundNumber}轮", 5)
+
+    // 信息面板
+    val infoItem = buildItem("SUNFLOWER") { b ->
+        b.setName("&6奖池信息")
+        b.getLore().add("&7当前奖池: &6${totalPool()} 金币")
+        b.getLore().add("&7参与人数: &e${tickets.size()}")
+        b.getLore().add("&7票价: &f${TICKET_PRICE} 金币/张")
+        b.getLore().add("&7距开奖: &e${countdown}s")
+        b.getLore().add("")
+        val myTickets = tickets.getOrDefault(player.getName(), 0)
+        b.getLore().add("&7你持有: &f$myTickets 张")
+        b.colored()
+    }
+    menu.set(4, infoItem)
+
+    // 购买按钮: 1/3/5/10 张
+    val buyAmounts = [1, 3, 5, 10]
+    val slots = [20, 21, 23, 24]
+    val mats = ["PAPER", "MAP", "BOOK", "ENCHANTED_BOOK"]
+
+    for (i in 0..<4) {
+        val amount = buyAmounts.get(i)
+        val cost = TICKET_PRICE * amount
+        val item = buildItem(mats.get(i)) { b ->
+            b.setName("&e购买 $amount 张彩票")
+            b.setAmount(amount)
+            b.getLore().add("&7花费: &6$cost 金币")
+            b.getLore().add("")
+            b.getLore().add("&a点击购买")
+            b.colored()
+        }
+        menu.set(slots.get(i), item)
+        menu.onClick(slots.get(i)) { clicker ->
+            val current = tickets.getOrDefault(clicker.getName(), 0)
+            if (current + amount > MAX_TICKETS) {
+                clicker.sendMessage("&c最多持有 $MAX_TICKETS 张票! 当前: $current 张")
+                return
+            }
+            if (!withdraw(clicker, cost)) {
+                clicker.sendMessage("&c余额不足! 需要 &6$cost 金币")
+                return
+            }
+            tickets.put(clicker.getName(), current + amount)
+            clicker.sendMessage("&a购买成功! 持有 ${current + amount} 张票")
+            clicker.closeInventory()
+            openLotteryMenu(clicker)  // 刷新 GUI
+        }
+    }
+
+    // 奖品展示
+    val prizeSlots = [38, 39, 41, 42]
+    for (i in 0..<PRIZES.size()) {
+        val p = PRIZES.get(i)
+        val item = buildItem("CHEST") { b ->
+            b.setName(p.get("name"))
+            b.getLore().add("&7概率: &f${(p.get("chance") * 100).toInt()}%")
+            b.getLore().add("&7包含:")
+            p.get("items").forEach { pi ->
+                b.getLore().add("  &f${pi.get("amount")}x ${pi.get("name")}")
+            }
+            b.colored()
+        }
+        menu.set(prizeSlots.get(i), item)
+    }
+
+    menu.open(player)
+}
+
+// ── 命令 ──────────────────────────────────────
+
+command("lottery") { sender, args ->
+    openLotteryMenu(sender)
+}
+
+log("彩票系统已加载 — /lottery 打开界面，每 ${DRAW_INTERVAL}s 自动开奖")

@@ -1,0 +1,64 @@
+// 商店脚本 — GUI 商店示例（需要 Vault + 经济插件）
+
+val menu = createMenu("&0&l商店", 3)
+
+// 金苹果 - 100 金币
+val apple = buildItem("GOLDEN_APPLE") { b ->
+    b.setName("&6金苹果")
+    b.getLore().add("&7恢复大量生命值")
+    b.getLore().add("")
+    b.getLore().add("&e价格: &6100 金币")
+    b.colored()
+}
+menu.set(11, apple)
+menu.onClick(11) { clicker ->
+    if (withdraw(clicker, 100.0)) {
+        giveItem(clicker, apple)
+        clicker.sendMessage("&a购买成功!")
+    } else {
+        clicker.sendMessage("&c余额不足!")
+    }
+}
+
+// 钻石剑 - 500 金币
+val sword = buildItem("DIAMOND_SWORD") { b ->
+    b.setName("&b&l传说之剑")
+    b.getLore().add("&7一把拥有神秘力量的剑")
+    b.getLore().add("")
+    b.getLore().add("&e价格: &6500 金币")
+    b.colored()
+}
+menu.set(13, sword)
+menu.onClick(13) { clicker ->
+    if (withdraw(clicker, 500.0)) {
+        giveItem(clicker, sword)
+        clicker.sendMessage("&a购买成功!")
+    } else {
+        clicker.sendMessage("&c余额不足!")
+    }
+}
+
+// 钻石甲 - 800 金币
+val chest = buildItem("DIAMOND_CHESTPLATE") { b ->
+    b.setName("&b&l钻石胸甲")
+    b.getLore().add("&7坚固的护甲")
+    b.getLore().add("")
+    b.getLore().add("&e价格: &6800 金币")
+    b.colored()
+}
+menu.set(15, chest)
+menu.onClick(15) { clicker ->
+    if (withdraw(clicker, 800.0)) {
+        giveItem(clicker, chest)
+        clicker.sendMessage("&a购买成功!")
+    } else {
+        clicker.sendMessage("&c余额不足!")
+    }
+}
+
+// 注册命令打开商店
+command("shop") { sender, args ->
+    menu.open(sender)
+}
+
+log("商店脚本已加载，使用 /shop 打开商店")
