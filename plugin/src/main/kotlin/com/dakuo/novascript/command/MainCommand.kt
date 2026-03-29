@@ -343,6 +343,223 @@ object MainCommand {
                 }
             }
         }
+
+        literal("reload") {
+            execute<CommandSender> { sender, _, _ ->
+                ModuleManager.reload()
+                sender.sendMessage("§a[NovaScript] 已重载 ${ModuleManager.getModuleNames().size} 个模块")
+            }
+        }
+    }
+
+    /** 从 RegisteredEntry 提取函数签名，如 broadcast(msg) */
+    private fun funcSignature(entry: com.novalang.runtime.NovaRuntime.RegisteredEntry): String {
+        val paramCount = entry.paramTypes?.size ?: run {
+            // 从 FunctionN 类型推断参数数量
+            val fn = entry.function ?: return entry.name
+            val cls = fn.javaClass
+            for (iface in cls.interfaces) {
+                val match = Regex("""Function(\d+)""").find(iface.simpleName)
+                if (match != null) return@run match.groupValues[1].toInt()
+            }
+            return entry.name
+        }
+        if (paramCount == 0) return "${entry.name}()"
+        val params = (1..paramCount).joinToString(", ") { "arg$it" }
+        return "${entry.name}($params)"
+    }
+
+    /** 构建函数条目的 hover 文本 */
+    private fun funcHover(entry: com.novalang.runtime.NovaRuntime.RegisteredEntry, prefix: String = ""): String {
+        return buildString {
+            append("§b$prefix${funcSignature(entry)}")
+            val desc = entry.description
+            if (!desc.isNullOrEmpty()) append("\n§7$desc")
+            if (entry.source != null) append("\n§8来源: ${entry.source}")
+        }
+    }
+
+    @CommandBody
+    val api = subCommand {
+        // /nova api — 总览
+        execute<CommandSender> { sender, _, _ ->
+            val rt = com.novalang.runtime.NovaRuntime.shared()
+            val functions = rt.listFunctions().filter { it.namespace == null && it.isFunction }
+            val variables = rt.listFunctions().filter { it.namespace == null && !it.isFunction }
+            val namespaces = rt.listNamespaces()
+            val proxySender = taboolib.common.platform.function.adaptCommandSender(sender)
+
+            sender.sendMessage("§8═══════════ §6NovaScript API §8═══════════")
+            sender.sendMessage("")
+
+            // 全局函数 — 可点击查看
+            taboolib.module.chat.Components.empty()
+                .append("  §e§l全局函数 §7(${functions.size})")
+                .hoverText("§7点击查看全部全局函数")
+                .clickRunCommand("/nova api functions")
+                .append(" §8[点击查看]")
+                .sendTo(proxySender)
+
+            // 全局变量 — 可点击查看
+            taboolib.module.chat.Components.empty()
+                .append("  §e§l全局变量 §7(${variables.size})")
+                .hoverText("§7点击查看全部全局变量")
+                .clickRunCommand("/nova api variables")
+                .append(" §8[点击查看]")
+                .sendTo(proxySender)
+
+            // 函数库列表 — 每个可点击展开
+            if (namespaces.isNotEmpty()) {
+                sender.sendMessage("")
+                sender.sendMessage("  §e§l函数库 §7(${namespaces.size})")
+                for (ns in namespaces.sorted()) {
+                    val count = rt.listFunctions(ns).size
+                    taboolib.module.chat.Components.empty()
+                        .append("    §6$ns §7($count 个)")
+                        .hoverText("§7点击查看 §b$ns §7的全部函数")
+                        .clickRunCommand("/nova api lib $ns")
+                        .sendTo(proxySender)
+                }
+            }
+
+            // 扩展函数 — 按类型分组
+            val extAll = rt.getExtensionRegistry().getAll()
+            if (extAll.isNotEmpty()) {
+                sender.sendMessage("")
+                val totalExt = extAll.values.sumOf { it.values.sumOf { l -> l.size } }
+                sender.sendMessage("  §e§l扩展函数 §7($totalExt)")
+                for ((type, methods) in extAll.entries.sortedBy { it.key.simpleName }) {
+                    val typeName = type.simpleName
+                    val count = methods.values.sumOf { it.size }
+                    taboolib.module.chat.Components.empty()
+                        .append("    §d$typeName §7($count 个)")
+                        .hoverText("§7点击查看 §d$typeName §7的扩展函数")
+                        .clickRunCommand("/nova api ext $typeName")
+                        .sendTo(proxySender)
+                }
+            }
+
+            sender.sendMessage("")
+            sender.sendMessage("§8════════════════════════════════════")
+        }
+
+        // /nova api ext <类型> — 查看指定类型的扩展函数
+        literal("ext") {
+            dynamic("类型") {
+                suggestion<CommandSender>(uncheck = true) { _, _ ->
+                    com.novalang.runtime.NovaRuntime.shared().getExtensionRegistry().getAll().keys.map { it.simpleName }
+                }
+                execute<CommandSender> { sender, context, _ ->
+                    val typeName = context["类型"]
+                    val rt = com.novalang.runtime.NovaRuntime.shared()
+                    val extAll = rt.getExtensionRegistry().getAll()
+                    val entry = extAll.entries.find { it.key.simpleName == typeName }
+                    val proxySender = taboolib.common.platform.function.adaptCommandSender(sender)
+
+                    if (entry == null) {
+                        sender.sendMessage("§7[NovaScript] 类型 '$typeName' 没有扩展函数")
+                        return@execute
+                    }
+
+                    val (type, methods) = entry
+                    val total = methods.values.sumOf { it.size }
+                    sender.sendMessage("§8═══════════ §d${type.simpleName} §7扩展函数 ($total) §8═══════════")
+
+                    for ((methodName, overloads) in methods.entries.sortedBy { it.key }) {
+                        for (ext in overloads) {
+                            val paramCount = ext.paramTypes?.size ?: 0
+                            val sig = if (paramCount == 0) "$methodName()" else {
+                                val params = (1..paramCount).joinToString(", ") { "arg$it" }
+                                "$methodName($params)"
+                            }
+                            taboolib.module.chat.Components.empty()
+                                .append("  §a${type.simpleName}.§f$sig")
+                                .hoverText("§b${type.simpleName}.$sig\n§7参数: $paramCount 个")
+                                .sendTo(proxySender)
+                        }
+                    }
+                    sender.sendMessage("§8════════════════════════════════════")
+                }
+            }
+        }
+
+        // /nova api functions — 全局函数列表
+        literal("functions") {
+            execute<CommandSender> { sender, _, _ ->
+                val rt = com.novalang.runtime.NovaRuntime.shared()
+                val functions = rt.listFunctions().filter { it.namespace == null && it.isFunction }.sortedBy { it.name }
+                val proxySender = taboolib.common.platform.function.adaptCommandSender(sender)
+
+                sender.sendMessage("§8═══════════ §e全局函数 §7(${functions.size}) §8═══════════")
+                for (fn in functions) {
+                    val sig = funcSignature(fn)
+                    val desc = fn.description ?: ""
+                    taboolib.module.chat.Components.empty()
+                        .append("  §a$sig")
+                        .hoverText(funcHover(fn))
+                        .append(" §7$desc")
+                        .sendTo(proxySender)
+                }
+                sender.sendMessage("§8════════════════════════════════════")
+            }
+        }
+
+        // /nova api variables — 全局变量列表
+        literal("variables") {
+            execute<CommandSender> { sender, _, _ ->
+                val rt = com.novalang.runtime.NovaRuntime.shared()
+                val variables = rt.listFunctions().filter { it.namespace == null && !it.isFunction }.sortedBy { it.name }
+                val proxySender = taboolib.common.platform.function.adaptCommandSender(sender)
+
+                sender.sendMessage("§8═══════════ §e全局变量 §7(${variables.size}) §8═══════════")
+                for (v in variables) {
+                    val typeName = v.returnType?.simpleName ?: "Any"
+                    val hover = buildString {
+                        append("§b${v.name} §8: §f$typeName")
+                        if (v.description != null) append("\n§7${v.description}")
+                    }
+                    taboolib.module.chat.Components.empty()
+                        .append("  §b${v.name}")
+                        .hoverText(hover)
+                        .append(" §8: §f$typeName")
+                        .sendTo(proxySender)
+                }
+                sender.sendMessage("§8════════════════════════════════════")
+            }
+        }
+
+        // /nova api lib <名称> — 查看指定函数库
+        literal("lib") {
+            dynamic("库名") {
+                suggestion<CommandSender>(uncheck = true) { _, _ ->
+                    com.novalang.runtime.NovaRuntime.shared().listNamespaces()
+                }
+                execute<CommandSender> { sender, context, _ ->
+                    val ns = context["库名"]
+                    val rt = com.novalang.runtime.NovaRuntime.shared()
+                    val entries = rt.listFunctions(ns).sortedBy { it.name }
+                    val proxySender = taboolib.common.platform.function.adaptCommandSender(sender)
+
+                    if (entries.isEmpty()) {
+                        sender.sendMessage("§7[NovaScript] 函数库 '$ns' 不存在或为空")
+                        return@execute
+                    }
+
+                    sender.sendMessage("§8═══════════ §6$ns §7(${entries.size}) §8═══════════")
+                    for (fn in entries) {
+                        val desc = fn.description ?: ""
+                        val displayName = if (fn.isFunction) "§a${funcSignature(fn)}" else "§b${fn.name}"
+                        val suffix = if (!fn.isFunction) " §8: §f${fn.returnType?.simpleName ?: "Any"}" else ""
+                        taboolib.module.chat.Components.empty()
+                            .append("  $displayName")
+                            .hoverText(funcHover(fn, "$ns."))
+                            .append("$suffix §7$desc")
+                            .sendTo(proxySender)
+                    }
+                    sender.sendMessage("§8════════════════════════════════════")
+                }
+            }
+        }
     }
 
     @CommandBody

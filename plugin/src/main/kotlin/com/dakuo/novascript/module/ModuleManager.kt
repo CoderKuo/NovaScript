@@ -137,6 +137,11 @@ object ModuleManager {
         modules.clear()
     }
 
+    fun reload() {
+        unloadAll()
+        loadAll()
+    }
+
     /** 将注册表关联到指定模块，模块卸载时自动清理 */
     fun trackRegistry(moduleName: String, registry: com.dakuo.novascript.ScriptRegistry) {
         modules[moduleName]?.registries?.add(registry)

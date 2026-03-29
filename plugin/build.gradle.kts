@@ -47,8 +47,10 @@ dependencies {
     compileOnly("ink.ptms.core:v12004:12004:universal")
     compileOnly(kotlin("stdlib"))
     compileOnly(fileTree("libs"))
-    taboo("com.github.CoderKuo.NovaLang:nova-runtime-all:0.1.12")
-    taboo("com.github.CoderKuo.NovaLang:nova-bukkit:0.1.12")
+    val novaGroup = if (project.property("novaSource") == "local") "com.novalang" else "com.github.CoderKuo.NovaLang"
+    val novaVer = project.property("novaVersion") as String
+    taboo("$novaGroup:nova-runtime-all:$novaVer")
+    taboo("$novaGroup:nova-bukkit:$novaVer")
     taboo("com.github.CoderKuo:Rulib:v1.0.0")
 }
 

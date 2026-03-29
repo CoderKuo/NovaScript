@@ -1,7 +1,6 @@
 package com.dakuo.novascript
 
 import taboolib.common.platform.function.info
-import taboolib.common.platform.function.warning
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -32,8 +31,18 @@ object UpdateChecker {
             try {
                 val latest = fetchLatestVersion() ?: return@Thread
                 if (latest != currentVersion && isNewer(latest, currentVersion)) {
-                    info("[NovaScript] 发现新版本: v$latest (当前: v$currentVersion)")
-                    info("[NovaScript] 下载: https://github.com/$REPO/releases/latest")
+                    info("")
+                    info("§8╔══════════════════════════════════════════╗")
+                    info("§8║  §e⬆ NovaScript §a有新版本可用!              §8║")
+                    info("§8║                                          §8║")
+                    info("§8║  §7当前版本: §f$currentVersion                        §8║")
+                    info("§8║  §7最新版本: §b$latest                        §8║")
+                    info("§8║                                          §8║")
+                    info("§8║  §7下载: §fhttps://github.com/$REPO §8║")
+                    info("§8╚══════════════════════════════════════════╝")
+                    info("")
+                } else if (latest == currentVersion) {
+                    info("[NovaScript] 当前已是最新版本 (v$currentVersion)")
                 }
             } catch (_: Exception) {
                 // 静默失败，不影响插件运行
