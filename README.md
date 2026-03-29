@@ -84,6 +84,38 @@ plugins/NovaScript/
 └── modules/                      # 扩展模块（jar）
 ```
 
+## 引入 API
+
+第三方插件或扩展模块通过 JitPack 引入 NovaScript API：
+
+```kotlin
+// build.gradle.kts
+repositories {
+    maven("https://jitpack.io")
+}
+
+dependencies {
+    compileOnly("com.github.CoderKuo.NovaScript:api:v1.0.2")
+}
+```
+
+```xml
+<!-- pom.xml -->
+<repository>
+    <id>jitpack.io</id>
+    <url>https://jitpack.io</url>
+</repository>
+
+<dependency>
+    <groupId>com.github.CoderKuo.NovaScript</groupId>
+    <artifactId>api</artifactId>
+    <version>v1.0.2</version>
+    <scope>provided</scope>
+</dependency>
+```
+
+[![](https://jitpack.io/v/CoderKuo/NovaScript.svg)](https://jitpack.io/#CoderKuo/NovaScript)
+
 ## 构建
 
 ```bash

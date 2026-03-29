@@ -45,8 +45,12 @@ plugins {
     java
 }
 
+repositories {
+    maven("https://jitpack.io")
+}
+
 dependencies {
-    compileOnly("com.dakuo.novascript:novascript-api:1.0.0-SNAPSHOT")
+    compileOnly("com.github.CoderKuo.NovaScript:api:v1.0.2")
     // compileOnly 目标插件 API...
 }
 ```

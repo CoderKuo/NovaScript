@@ -5,11 +5,14 @@
 ## 添加依赖
 
 ```kotlin
-// Gradle
-compileOnly("com.dakuo.novascript:novascript-api:1.0.0-SNAPSHOT")
+// build.gradle.kts
+repositories {
+    maven("https://jitpack.io")
+}
 
-// 或本地文件
-compileOnly(files("libs/novascript-api.jar"))
+dependencies {
+    compileOnly("com.github.CoderKuo.NovaScript:api:v1.0.2")
+}
 ```
 
 ## 注册脚本
